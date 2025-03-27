@@ -1,21 +1,29 @@
 package server
 
 import (
+	"bufio"
 	"context"
+	"io"
 	"net"
 	"strconv"
 	"strings"
-	"bufio"
-	"io"
 
 	E "github.com/thehxdev/gosocks/errors"
 	C "github.com/thehxdev/gosocks/internal/constants"
 )
 
+type Handler interface {
+	HandleConn(ctx context.Context, conn net.Conn, connReader *bufio.Reader, req Request) error
+}
+
+type defaultConnectHandler struct {
+	*net.Dialer
+}
+
 // default handler for CONNECT command
-func defaultUserConnectHandler(ctx context.Context, conn net.Conn, connReader *bufio.Reader, req Request) (err error) {
+func (h *defaultConnectHandler) HandleConn(ctx context.Context, conn net.Conn, connReader *bufio.Reader, req Request) (err error) {
 	address := net.JoinHostPort(req.destAddr.String(), strconv.Itoa(int(req.destPort)))
-	target, err := net.Dial("tcp", address)
+	target, err := h.Dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		SendReply(conn, E.ErrConnectionRefused, ReplyParams{})
 		return
@@ -68,4 +76,3 @@ func defaultUserConnectHandler(ctx context.Context, conn net.Conn, connReader *b
 
 	return
 }
-

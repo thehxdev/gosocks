@@ -1,8 +1,8 @@
 package server
 
 import (
-	"io"
 	"encoding/binary"
+	"io"
 
 	E "github.com/thehxdev/gosocks/errors"
 	C "github.com/thehxdev/gosocks/internal/constants"

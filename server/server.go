@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"time"
 
 	E "github.com/thehxdev/gosocks/errors"
 	"github.com/thehxdev/gosocks/internal/bufpool"
@@ -19,17 +20,18 @@ import (
 const defaultDNSServer string = "8.8.8.8:53"
 
 type AddrRewriterFunc func(dstAddr net.Addr, dstPort uint16) (net.Addr, uint16)
-type HandlerFunc func(ctx context.Context, conn net.Conn, connReader *bufio.Reader, req Request) error
+
+// type HandlerFunc func(ctx context.Context, conn net.Conn, connReader *bufio.Reader, req Request) error
 
 type Server struct {
-	listener           net.Listener
-	logger             *log.Logger
-	resolver           *net.Resolver
-	rewriter           AddrRewriterFunc
-	bpool              bufpool.BufPool
-	userConnectHandler HandlerFunc
-	// TODO:  userBindHandler      HandlerFunc
-	// TODO:  userAssociateHandler HandlerFunc
+	listener       net.Listener
+	logger         *log.Logger
+	resolver       *net.Resolver
+	rewriter       AddrRewriterFunc
+	bpool          bufpool.BufPool
+	connectHandler Handler
+	// TODO:  bindHandler      Handler
+	// TODO:  associateHandler Handler
 }
 
 type Request struct {
@@ -43,9 +45,9 @@ type Config struct {
 	Logger           *log.Logger
 	Resolver         *net.Resolver
 	Rewriter         AddrRewriterFunc
-	ConnectHandler   HandlerFunc
-	BindHandler      HandlerFunc
-	AssociateHandler HandlerFunc
+	ConnectHandler   Handler
+	BindHandler      Handler
+	AssociateHandler Handler
 }
 
 var (
@@ -66,8 +68,8 @@ func New(conf Config) (*Server, error) {
 		rewriter: func(destAddr net.Addr, destPort uint16) (net.Addr, uint16) {
 			return destAddr, destPort
 		},
-		bpool:              bufpool.New(C.DefaultMTU),
-		userConnectHandler: defaultUserConnectHandler,
+		bpool:          bufpool.New(C.DefaultMTU),
+		connectHandler: &defaultConnectHandler{Dialer: &net.Dialer{Timeout: time.Second * 10}},
 	}
 	return s, nil
 }
@@ -88,10 +90,7 @@ func (s *Server) ListenAndServe(network, addr string) error {
 			s.logger.Println(err)
 		}
 		go func() {
-			err := s.Serve(conn)
-			if err != nil {
-				s.logger.Println(err)
-			}
+			s.Serve(conn)
 			conn.Close()
 		}()
 	}
@@ -201,7 +200,7 @@ func (s *Server) Serve(conn net.Conn) (err error) {
 	r.destAddr, r.destPort = s.rewriter(r.destAddr, r.destPort)
 	switch r.command {
 	case C.CommandCONNECT:
-		err = s.userConnectHandler(context.Background(), conn, connReader, r)
+		err = s.connectHandler.HandleConn(context.Background(), conn, connReader, r)
 	case C.CommandBIND:
 		fallthrough
 	case C.CommandASSOCIATE:

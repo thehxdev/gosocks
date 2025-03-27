@@ -1,15 +1,15 @@
-package gosocks
+package server
 
 import (
 	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
-	"strconv"
 
 	E "github.com/thehxdev/gosocks/errors"
 	"github.com/thehxdev/gosocks/internal/bufpool"
@@ -48,12 +48,6 @@ type Config struct {
 	AssociateHandler HandlerFunc
 }
 
-type ReplyParams struct {
-	addrType byte
-	bndAddr  []byte
-	bndPort  uint16
-}
-
 var (
 	defaultLogger   = log.New(os.Stderr, "[gosocks] ", log.Lshortfile|log.Ldate)
 	defaultResolver = &net.Resolver{
@@ -63,53 +57,6 @@ var (
 		},
 	}
 )
-
-func DialToDestination(conn net.Conn, network string, destAddr net.Addr, destPort uint16) (target net.Conn, err error) {
-	address := net.JoinHostPort(destAddr.String(), strconv.Itoa(int(destPort)))
-	target, err = net.Dial("tcp", address)
-	if err != nil {
-		SendReply(conn, E.ErrConnectionRefused, ReplyParams{})
-		return
-	}
-	bnd := target.LocalAddr().(*net.TCPAddr)
-	err = SendReply(conn, nil, ReplyParams{
-		addrType: C.AddrTypeV4,
-		bndAddr:  bnd.IP,
-		bndPort:  uint16(bnd.Port),
-	})
-	return
-}
-
-func defaultUserConnectHandler(ctx context.Context, conn net.Conn, connReader *bufio.Reader, req Request) (err error) {
-	target, err := DialToDestination(conn, "tcp", req.destAddr, req.destPort)
-	defer target.Close()
-
-	targetReader := bufio.NewReader(target)
-
-	errChan := make(chan error, 2)
-	go func() {
-		_, err := io.Copy(conn, targetReader)
-		errChan <- err
-	}()
-
-	go func() {
-		_, err := io.Copy(target, connReader)
-		errChan <- err
-	}()
-
-	for range 2 {
-		select {
-		case err = <-errChan:
-			if err != nil && err != net.ErrClosed {
-				return
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-
-	return
-}
 
 func New(conf Config) (*Server, error) {
 	// TODO: construct the server based on `Config`
@@ -141,7 +88,7 @@ func (s *Server) ListenAndServe(network, addr string) error {
 			s.logger.Println(err)
 		}
 		go func() {
-			err := s.connectionHandler(conn)
+			err := s.Serve(conn)
 			if err != nil {
 				s.logger.Println(err)
 			}
@@ -187,8 +134,9 @@ func (s *Server) readSocks5Request(reader io.Reader, buffer []byte) (r Request, 
 	var dstAddrLen int
 	switch addrType {
 	case C.AddrTypeV4:
-		dstAddrLen = 4
+		dstAddrLen = net.IPv4len
 		r.destAddr = &net.IPAddr{IP: net.IP(buffer[ptr : ptr+dstAddrLen]).To4()}
+
 	case C.AddrTypeDomainName:
 		dstAddrLen = int(buffer[ptr])
 		ptr += 1
@@ -197,9 +145,14 @@ func (s *Server) readSocks5Request(reader io.Reader, buffer []byte) (r Request, 
 		if err != nil {
 			return r, err
 		}
+		if len(ips) == 0 {
+			err = fmt.Errorf("empty IP address list for domain name: %s", host)
+			return r, err
+		}
 		r.destAddr = &net.IPAddr{IP: ips[0]}
+
 	case C.AddrTypeV6:
-		dstAddrLen = 16
+		dstAddrLen = net.IPv6len
 		r.destAddr = &net.IPAddr{IP: net.IP(buffer[ptr : ptr+dstAddrLen]).To16()}
 	}
 
@@ -209,7 +162,7 @@ func (s *Server) readSocks5Request(reader io.Reader, buffer []byte) (r Request, 
 	return
 }
 
-func (s *Server) connectionHandler(conn net.Conn) (err error) {
+func (s *Server) Serve(conn net.Conn) (err error) {
 	buf := s.bpool.Get()
 	defer s.bpool.Put(buf)
 
@@ -257,29 +210,5 @@ func (s *Server) connectionHandler(conn net.Conn) (err error) {
 		err = SendReply(conn, E.ErrCommandNotSupported, ReplyParams{})
 	}
 
-	return
-}
-
-func SendReply(dest io.Writer, reply E.Error, params ReplyParams) (err error) {
-	var code byte = 0x00
-	if reply != nil {
-		code = reply.ReplyCode()
-	}
-
-	buf := []byte{}
-	buf = append(buf, []byte{C.SocksVersion5, code, 0x00, params.addrType}...)
-
-	switch params.addrType {
-	case C.AddrTypeV4:
-		fallthrough
-	case C.AddrTypeV6:
-		buf = append(buf, params.bndAddr...)
-	case C.AddrTypeDomainName:
-		buf = append(buf, byte(len(params.bndAddr)))
-		buf = append(buf, params.bndAddr...)
-	}
-
-	buf = binary.BigEndian.AppendUint16(buf, params.bndPort)
-	_, err = dest.Write(buf)
 	return
 }

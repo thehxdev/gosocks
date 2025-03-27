@@ -12,8 +12,20 @@ import (
 	C "github.com/thehxdev/gosocks/internal/constants"
 )
 
+// A wrapper around client connection reader
+type ConnReader interface {
+	io.Reader
+}
+
+// A wrapper around client connection writer
+type ConnWriter interface {
+	io.Writer
+}
+
+// This type wraps a handler for client connection
 type Handler interface {
-	HandleConn(ctx context.Context, conn net.Conn, connReader *bufio.Reader, req Request) error
+	// r and w parameters are reader and writer wrappers for client connection. The reader may be a bufio reader.
+	HandleConn(ctx context.Context, r ConnReader, w ConnWriter, req Request) error
 }
 
 type defaultConnectHandler struct {
@@ -21,11 +33,11 @@ type defaultConnectHandler struct {
 }
 
 // default handler for CONNECT command
-func (h *defaultConnectHandler) HandleConn(ctx context.Context, conn net.Conn, connReader *bufio.Reader, req Request) (err error) {
+func (h *defaultConnectHandler) HandleConn(ctx context.Context, r ConnReader, w ConnWriter, req Request) (err error) {
 	address := net.JoinHostPort(req.destAddr.String(), strconv.Itoa(int(req.destPort)))
 	target, err := h.Dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
-		SendReply(conn, E.ErrConnectionRefused, ReplyParams{})
+		SendReply(w, E.ErrConnectionRefused, ReplyParams{})
 		return
 	}
 	defer target.Close()
@@ -41,7 +53,7 @@ func (h *defaultConnectHandler) HandleConn(ctx context.Context, conn net.Conn, c
 		addrType = C.AddrTypeV6
 	}
 
-	err = SendReply(conn, nil, ReplyParams{
+	err = SendReply(w, nil, ReplyParams{
 		addrType: addrType,
 		bndAddr:  bnd.IP,
 		bndPort:  uint16(bnd.Port),
@@ -54,12 +66,12 @@ func (h *defaultConnectHandler) HandleConn(ctx context.Context, conn net.Conn, c
 
 	errChan := make(chan error, 2)
 	go func() {
-		_, err := io.Copy(conn, targetReader)
+		_, err := io.Copy(w, targetReader)
 		errChan <- err
 	}()
 
 	go func() {
-		_, err := io.Copy(target, connReader)
+		_, err := io.Copy(target, r)
 		errChan <- err
 	}()
 

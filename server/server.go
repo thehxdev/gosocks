@@ -200,7 +200,7 @@ func (s *Server) Serve(conn net.Conn) (err error) {
 	r.destAddr, r.destPort = s.rewriter(r.destAddr, r.destPort)
 	switch r.command {
 	case C.CommandCONNECT:
-		err = s.connectHandler.HandleConn(context.Background(), conn, connReader, r)
+		err = s.connectHandler.HandleConn(context.Background(), connReader, conn, r)
 	case C.CommandBIND:
 		fallthrough
 	case C.CommandASSOCIATE:

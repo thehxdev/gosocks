@@ -3,7 +3,7 @@ package gosocks
 const (
 	SocksVersion5 byte = 0x05
 	Reserved      byte = 0x00
-	DefaultMTU    int  = 1500
+	DefaultMTU    int  = 9000
 )
 
 const (

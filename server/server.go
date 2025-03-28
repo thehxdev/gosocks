@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
@@ -18,10 +17,6 @@ import (
 )
 
 const defaultDNSServer string = "8.8.8.8:53"
-
-type AddrRewriterFunc func(dstAddr net.Addr, dstPort uint16) (net.Addr, uint16)
-
-// type HandlerFunc func(ctx context.Context, conn net.Conn, connReader *bufio.Reader, req Request) error
 
 type Server struct {
 	listener       net.Listener
@@ -63,11 +58,9 @@ var (
 func New(conf Config) (*Server, error) {
 	// TODO: construct the server based on `Config`
 	s := &Server{
-		logger:   defaultLogger,
-		resolver: defaultResolver,
-		rewriter: func(destAddr net.Addr, destPort uint16) (net.Addr, uint16) {
-			return destAddr, destPort
-		},
+		logger:         defaultLogger,
+		resolver:       defaultResolver,
+		rewriter:       NoRewrite,
 		bpool:          bufpool.New(C.DefaultMTU),
 		connectHandler: &defaultConnectHandler{Dialer: &net.Dialer{Timeout: time.Second * 10}},
 	}
@@ -96,8 +89,8 @@ func (s *Server) ListenAndServe(network, addr string) error {
 	}
 }
 
-func readClientMethods(reader io.Reader, buffer []byte) (version byte, methods []byte, err error) {
-	_, err = reader.Read(buffer)
+func readClientMethods(r ConnReader, buffer []byte) (version byte, methods []byte, err error) {
+	_, err = r.Read(buffer)
 	if err != nil {
 		return
 	}
@@ -113,17 +106,17 @@ func readClientMethods(reader io.Reader, buffer []byte) (version byte, methods [
 	return
 }
 
-func (s *Server) readSocks5Request(reader io.Reader, buffer []byte) (r Request, err error) {
-	_, err = reader.Read(buffer)
+func (s *Server) readSocks5Request(r ConnReader, buffer []byte) (req Request, err error) {
+	_, err = r.Read(buffer)
 	if err != nil {
 		return
 	}
 
 	ptr := 0
-	r.version = buffer[ptr]
+	req.version = buffer[ptr]
 	ptr += 1
 
-	r.command = buffer[ptr]
+	req.command = buffer[ptr]
 	// skip reserved byte
 	ptr += 2
 
@@ -134,7 +127,7 @@ func (s *Server) readSocks5Request(reader io.Reader, buffer []byte) (r Request, 
 	switch addrType {
 	case C.AddrTypeV4:
 		dstAddrLen = net.IPv4len
-		r.destAddr = &net.IPAddr{IP: net.IP(buffer[ptr : ptr+dstAddrLen]).To4()}
+		req.destAddr = &net.IPAddr{IP: net.IP(buffer[ptr : ptr+dstAddrLen]).To4()}
 
 	case C.AddrTypeDomainName:
 		dstAddrLen = int(buffer[ptr])
@@ -142,21 +135,21 @@ func (s *Server) readSocks5Request(reader io.Reader, buffer []byte) (r Request, 
 		host := string(buffer[ptr : ptr+dstAddrLen])
 		ips, err := s.resolver.LookupIP(context.Background(), "ip", host)
 		if err != nil {
-			return r, err
+			return req, err
 		}
 		if len(ips) == 0 {
 			err = fmt.Errorf("empty IP address list for domain name: %s", host)
-			return r, err
+			return req, err
 		}
-		r.destAddr = &net.IPAddr{IP: ips[0]}
+		req.destAddr = &net.IPAddr{IP: ips[0]}
 
 	case C.AddrTypeV6:
 		dstAddrLen = net.IPv6len
-		r.destAddr = &net.IPAddr{IP: net.IP(buffer[ptr : ptr+dstAddrLen]).To16()}
+		req.destAddr = &net.IPAddr{IP: net.IP(buffer[ptr : ptr+dstAddrLen]).To16()}
 	}
 
 	ptr += dstAddrLen
-	r.destPort = binary.BigEndian.Uint16(buffer[ptr : ptr+2])
+	req.destPort = binary.BigEndian.Uint16(buffer[ptr : ptr+2])
 
 	return
 }

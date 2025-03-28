@@ -24,7 +24,10 @@ type ConnWriter interface {
 
 // This type wraps a handler for client connection
 type Handler interface {
-	// r and w parameters are reader and writer wrappers for client connection. The reader may be a bufio reader.
+	// r and w parameters are reader and writer wrappers for client connection.
+	// The reason behind seperation between reader and writer and also not using an
+	// `io.ReadWriter` is because the server wrapes the connection reader in `bufio.Reader`
+	// and the connection writer stays on touched.
 	HandleConn(ctx context.Context, r ConnReader, w ConnWriter, req Request) error
 }
 
@@ -48,9 +51,11 @@ func (h *defaultConnectHandler) HandleConn(ctx context.Context, r ConnReader, w 
 	// Keep in mind that `.To4` method on `net.IP` type returns *non-nil* in case
 	// of an IPv6 that represents an IPv4. So it's not a good way to check IP version.
 	// https://stackoverflow.com/questions/22751035/golang-distinguish-ipv4-ipv6
-	var addrType byte = C.AddrTypeV4
+	var addrType byte
 	if strings.Contains(bnd.IP.String(), ":") {
 		addrType = C.AddrTypeV6
+	} else {
+		addrType = C.AddrTypeV4
 	}
 
 	err = SendReply(w, nil, ReplyParams{

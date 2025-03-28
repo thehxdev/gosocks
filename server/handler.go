@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	E "github.com/thehxdev/gosocks/errors"
+	"github.com/thehxdev/gosocks/internal/bufpool"
 	C "github.com/thehxdev/gosocks/internal/constants"
 )
 
@@ -38,7 +39,7 @@ type defaultConnectHandler struct {
 // default handler for CONNECT command
 func (h *defaultConnectHandler) HandleConn(ctx context.Context, r ConnReader, w ConnWriter, req Request) (err error) {
 	address := net.JoinHostPort(req.destAddr.String(), strconv.Itoa(int(req.destPort)))
-	target, err := h.Dialer.DialContext(ctx, "tcp", address)
+	target, err := h.DialContext(ctx, "tcp", address)
 	if err != nil {
 		SendReply(w, E.ErrConnectionRefused, ReplyParams{})
 		return
@@ -89,6 +90,44 @@ func (h *defaultConnectHandler) HandleConn(ctx context.Context, r ConnReader, w 
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	}
+
+	return
+}
+
+type defaultAssociateHandler struct {
+	*net.Dialer
+	bpool bufpool.BufPool
+}
+
+func (h *defaultAssociateHandler) HandleConn(ctx context.Context, r ConnReader, w ConnWriter, req Request) (err error) {
+	// TODO:  Create a context for handling udp
+	_, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	address := net.JoinHostPort(req.destAddr.String(), strconv.Itoa(int(req.destPort)))
+	target, err := h.DialContext(ctx, "udp", address)
+	if err != nil {
+		SendReply(w, E.ErrConnectionRefused, ReplyParams{})
+		return
+	}
+	defer target.Close()
+
+	udpListener, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		SendReply(w, E.ErrGeneralServerError, ReplyParams{})
+		return
+	}
+
+	bnd := udpListener.LocalAddr().(*net.UDPAddr)
+	err = SendReply(w, nil, ReplyParams{
+		// FIXME: set correct address type
+		addrType: C.AddrTypeV4,
+		bndAddr:  bnd.IP,
+		bndPort:  bnd.AddrPort().Port(),
+	})
+	if err != nil {
+		return
 	}
 
 	return

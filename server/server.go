@@ -19,14 +19,14 @@ import (
 const defaultDNSServer string = "8.8.8.8:53"
 
 type Server struct {
-	listener       net.Listener
-	logger         *log.Logger
-	resolver       *net.Resolver
-	rewriter       AddrRewriterFunc
-	bpool          bufpool.BufPool
-	connectHandler Handler
-	// TODO:  bindHandler      Handler
-	// TODO:  associateHandler Handler
+	listener         net.Listener
+	logger           *log.Logger
+	resolver         *net.Resolver
+	rewriter         AddrRewriterFunc
+	bpool            bufpool.BufPool
+	connectHandler   Handler
+	bindHandler      Handler
+	associateHandler Handler
 }
 
 type Request struct {
@@ -37,6 +37,7 @@ type Request struct {
 }
 
 type Config struct {
+	MTU              int
 	Logger           *log.Logger
 	Resolver         *net.Resolver
 	Rewriter         AddrRewriterFunc
@@ -53,16 +54,22 @@ var (
 			return net.Dial("udp", defaultDNSServer)
 		},
 	}
+	defaultDialer = &net.Dialer{
+		Timeout:  time.Second * 10,
+		Resolver: defaultResolver,
+	}
 )
 
 func New(conf Config) (*Server, error) {
 	// TODO: construct the server based on `Config`
+	bpool := bufpool.New(C.DefaultMTU)
 	s := &Server{
-		logger:         defaultLogger,
-		resolver:       defaultResolver,
-		rewriter:       NoRewrite,
-		bpool:          bufpool.New(C.DefaultMTU),
-		connectHandler: &defaultConnectHandler{Dialer: &net.Dialer{Timeout: time.Second * 10}},
+		logger:           defaultLogger,
+		resolver:         defaultResolver,
+		rewriter:         NoRewrite,
+		bpool:            bpool,
+		connectHandler:   &defaultConnectHandler{Dialer: defaultDialer},
+		associateHandler: &defaultAssociateHandler{Dialer: defaultDialer, bpool: bpool},
 	}
 	return s, nil
 }
@@ -195,8 +202,10 @@ func (s *Server) Serve(conn net.Conn) (err error) {
 	case C.CommandCONNECT:
 		err = s.connectHandler.HandleConn(context.Background(), connReader, conn, r)
 	case C.CommandBIND:
+		// err = s.bindHandler.HandleConn(context.Background(), connReader, conn, r)
 		fallthrough
 	case C.CommandASSOCIATE:
+		// err = s.associateHandler.HandleConn(context.Background(), connReader, conn, r)
 		fallthrough
 	default:
 		err = SendReply(conn, E.ErrCommandNotSupported, ReplyParams{})
